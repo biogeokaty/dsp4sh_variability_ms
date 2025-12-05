@@ -1,13 +1,156 @@
-DSP4SH - Soil Health Indicator Variability and Management Sensitivity
-================
-Katy Dynarski
-2025-7-22
+---
+title: "DSP4SH v6 - Indicator Analysis"
+author: "Katy Dynarski"
+date: "2024-4-12"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load libraries
+library(here)
+library(flextable)
+library(multcomp)
+library(multcompView)
+library(corrr)
+library(ggcorrplot)
+library(corrplot)
+library(lme4)
+library(broom.mixed)
+library(lmerTest)
+library(ggeffects)
+library(ggrepel)
+library(ggspatial)
+library(ggeasy)
+library(sf)
+library(maps)
+library(paletteer)
+library(missMDA)
+library(vegan)
+library(ggfortify)
+library(scales)
+library(metafor)
+library(ggpubr)
+library(glmulti)
+library(iml)
+library(patchwork)
+library(PNWColors)
+library(tidyverse)
+
+# Load data
+project <- read.csv(here("data_processed", "project_data_meta.csv"))
+surf <- read.csv(here("data_processed","surface_horizons_meta.csv"))
+shape_spatial_mean_scores <- read.csv(here("data_processed", "shape_spatial_mean_scores.csv"))
+
+# Make list of summary functions - useful for generating summary tables
+mean_sd <- list(mean = ~round(mean(.x, na.rm = TRUE), 2), 
+  sd = ~round(sd(.x, na.rm = TRUE), 2)
+)
+
+median_sd <- list(median = ~round(median(.x, na.rm = TRUE), 2), 
+  sd = ~round(sd(.x, na.rm = TRUE), 2)
+)
+
+mean_sd_cv <- list(
+  mean = ~round(mean(.x, na.rm = TRUE), 2), 
+  sd = ~round(sd(.x, na.rm = TRUE), 2),
+  cv = ~round(((sd(.x, na.rm=TRUE) / mean(.x, na.rm=TRUE))* 100), 2)
+)
+
+min_max <- list(
+  min = ~min(.x, na.rm=TRUE), 
+  max = ~max(.x, na.rm=TRUE)
+)
+
+# Custom ggplot themes
+theme_katy <- function(base_size=8) {
+  theme_classic(base_size=base_size) %+replace%
+    theme(# Legend
+      legend.title=element_text(size=rel(1)), 
+      legend.text=element_text(size=rel(.8), margin = margin(b = 0)),
+      #axes                      
+      axis.text=element_text(size=rel(.8)),
+      axis.title=element_text(size=rel(1)))
+}
+
+# Make vector of indicator labels so they will print nicely
+indicator_labs <- c("soc_pct" = "SOC",
+                    "bglucosaminidase" = "NAG activity",
+                    "ace" = "ACE protein",
+                    "bglucosidase" = "BG activity",
+                    "kssl_wsa" = "Single sieve aggregate stability",
+                    "yoder_agg_stab_mwd" = "Multiple sieve aggregate MWD",
+                    "arylsulfatase" = "AS activity",
+                    "pox_c" = "POX-C",
+                    "tn_pct" = "Total N%",
+                    "bulk_density" = "Bulk density",
+                    "soil_respiration" = "Soil respiration",
+                    "phosphodiesterase" = "Phosphodiesterase",
+                    "alkaline_phosphatase" = "AlkP activity",
+                    "acid_phosphatase" = "AcidP activity",
+                    "ph_combined" = "pH")
+
+# Also make into dataframe (need this to use labels within map functions)
+indicator_labs_df <- data.frame(indicator_labs) %>%
+  rownames_to_column() %>%
+  rename(indicator = rowname,
+         label = indicator_labs)
+
+# Project labels
+project_labels <- c("UnivOfMinnesota" = "University of Minnesota",
+                    "UTRGV" = "University of Texas RGV",
+                    "WashingtonState" = "Washington State",
+                    "TexasA&MPt-1" = "Texas A&M - 1",
+                    "TexasA&MPt-2" = "Texas A&M - 2",
+                    "NCState" = "North Carolina State",
+                    "Illinois" = "University of Illinois",
+                    "OregonState" = "Oregon State",
+                    "KansasState" = "Kansas State",
+                    "UConn" = "University of Connecticut")
+
+project_labels_df <- data.frame(project_labels) %>%
+  rownames_to_column()
+
+# Pivot indicator data longer - needed for many analyses
+surf_long <- surf %>%
+  dplyr::select(project, dsp_pedon_id, soil, label, trt, lu,  
+         mat, map, lu, till, clay_combined,
+         soc_pct, bulk_density, kssl_wsa:yoder_agg_stab_mwd, 
+         soil_respiration:acid_phosphatase, arylsulfatase:ace) %>%
+  pivot_longer(soc_pct:ace, names_to="indicator", values_to="value") %>%
+  mutate(label=factor(label, levels=c("BAU", "SHM", "Ref")))
+
+# Vector for indicator order for consistent plotting
+indicator_plotting_order <- c("bulk_density", "kssl_wsa", "yoder_agg_stab_mwd",
+                              "soc_pct", "ace", "pox_c",
+                              "soil_respiration","bglucosidase", "bglucosaminidase", 
+                              "acid_phosphatase", "alkaline_phosphatase", "arylsulfatase")
+
+indicator_plotting_order2 <- c("Bulk density", "Single sieve aggregate stability", 
+                               "Multiple sieve aggregate stability",
+                              "SOC", "ACE protein", "POX-C",
+                              "Soil respiration","BG activity", "NAG activity", 
+                              "AcidP activity", "AlkP activity", "AS activity")
+
+# Vector for project order for consistent plotting
+project_plotting_order <- c("UConn", "Illinois", "KansasState", "UnivOfMinnesota", "NCState", 
+                            "OregonState", "TexasA&MPt-1", "TexasA&MPt-2", "UTRGV")
+
+# Make list of indicators for purrr
+indicators <- surf_long %>%
+  distinct(indicator) %>%
+  pull(indicator) %>%
+  as.character()
+```
 
 # Project Background Information
 
 ## Maps and tables about DSP4SH projects
 
-``` r
+```{r make tables needed for map}
 # Make dataframe for adding project data annotation to map, with just one point for each project label combination, text label describing project
 
 # Get unique soil series
@@ -45,7 +188,7 @@ project_labs <- project_annotate %>%
 
 Make map:
 
-``` r
+```{r Figure 1 map of DSP4SH sites}
 # Download map of USA from maps() and convert to sf
 usa <- st_as_sf(maps::map("state", plot = FALSE, fill = TRUE))
 
@@ -63,19 +206,12 @@ ggplot(data=usa) +
   theme_classic() +
   easy_remove_axes() +
   theme(legend.position="none")
-```
-
-    ## Scale on map varies by more than 10%, scale bar may be inaccurate
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%201%20map%20of%20DSP4SH%20sites-1.png)<!-- -->
-
-``` r
-# ggsave(here("figs", "ms_figs_alt", "fig1_project_map.png"),  width=8, height=5, units="in", dpi=500)
+# ggsave(here("figs", "ms_revision_figs", "fig1_project_map.png"),  width=8, height=5, units="in", dpi=500)
 ```
 
 Generate overview table of project information:
 
-``` r
+```{r Table 1 dsp4sh project overview table}
 # Average climate data - to be added in to project overview table
 site_clim_sum <- project %>%
   group_by(project) %>%
@@ -91,33 +227,14 @@ project_table <- project_annotate %>%
   relocate(label, .after=map) %>%
   arrange(factor(project, levels=project_plotting_order), label)
 flextable(project_table)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/Table 1 dsp4sh project overview table-1.png" width="913" />
-
-``` r
-# write_csv(project_table, here("figs", "ms_figs_alt", "table1_project_table.csv"))
-```
-
-Table with more detail on each project treatment:
-
-``` r
-treatment_table <- surf %>%
-  dplyr::select(project, label, lu, trt, dsp_plot_id) %>%
-  distinct() %>%
-  group_by(project, label, lu, trt) %>%
-  count() %>%
-  rename("n_plots" = "n") %>%
-  arrange(project)
-# write_csv(treatment_table, here("figs", "ms_figs", "tablesupp1_project_treatment_table.csv"))
+# write_csv(project_table, here("figs", "ms_revision_figs", "table1_project_table.csv"))
 ```
 
 ## Environmental data tables
 
-Table of range in environmental conditions - this is not for a table but
-is referenced directly in the text:
+Table of range in environmental conditions - this is not for a table but is referenced directly in the text:
 
-``` r
+```{r range of environmental characteristics across all sites}
 site_range_table <- project %>%
   summarize(across(where(is.numeric), min_max)) %>%
   mutate(across(where(is.numeric), ~round(.x, 2))) %>%
@@ -129,11 +246,9 @@ site_range_table <- project %>%
 flextable(site_range_table)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range of environmental characteristics across all sites-1.png" width="410" />
-
 Range in indicator values across all sites:
 
-``` r
+```{r range in indicator values across all sites}
 indicator_range_table <- surf_long %>%
   group_by(indicator) %>%
   summarize(across(where(is.numeric), min_max)) %>%
@@ -141,11 +256,9 @@ indicator_range_table <- surf_long %>%
 flextable(indicator_range_table)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range in indicator values across all sites-1.png" width="1893" />
-
 Range in indicator values in reference sites only:
 
-``` r
+```{r range in indicator values in reference sites only}
 indicator_range_table_ref <- surf_long %>%
   filter(label=="Ref") %>%
   group_by(indicator) %>%
@@ -154,9 +267,7 @@ indicator_range_table_ref <- surf_long %>%
 flextable(indicator_range_table_ref)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range in indicator values in reference sites only-1.png" width="1893" />
-
-``` r
+```{r range in surface soil clay content and bulk density}
 # How many projects had clay data?
 clay_n <- surf %>%
   group_by(project, label) %>%
@@ -168,33 +279,19 @@ clay_n <- surf %>%
 site_clay <- surf %>%
   group_by(project, label) %>%
   summarize(clay_mean = mean(clay_combined, na.rm=TRUE))
-```
 
-    ## `summarise()` has grouped output by 'project'. You can override using the
-    ## `.groups` argument.
-
-``` r
 clay_min_max <- site_clay %>%
   ungroup() %>%
   na.omit() %>%
   summarize(across(where(is.numeric), min_max)) %>%
   mutate(across(where(is.numeric), ~round(.x, 2)))
 flextable(clay_min_max)
-```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range in surface soil clay content and bulk density-1.png" width="492" />
-
-``` r
 site_bd <- surf %>%
   group_by(project, label) %>%
   summarize(bd_mean = mean(bulk_density, na.rm=TRUE)) %>%
   arrange(bd_mean)
-```
 
-    ## `summarise()` has grouped output by 'project'. You can override using the
-    ## `.groups` argument.
-
-``` r
 bd_min_max <- site_bd %>%
   ungroup() %>%
   na.omit() %>%
@@ -203,19 +300,15 @@ bd_min_max <- site_bd %>%
 flextable(bd_min_max)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range in surface soil clay content and bulk density-2.png" width="451" />
-
 # Analysis of soil health indicator variability across DSP4SH projects
 
-For most of the analyses here, I will be looking at indicator values in
-the 0-10 cm depth increment only (0-5 cm and 5-10 cm values were
-averaged to get 0-10 cm values).
+For most of the analyses here, I will be looking at indicator values in the 0-10 cm depth increment only (0-5 cm and 5-10 cm values were averaged to get 0-10 cm values).
 
 ## Summary tables of indicator values
 
 Mean indicator values in Reference, SHM, and BAU systems:
 
-``` r
+```{r Table S1 mean indicator values in all systems}
 indicator_summary_wide <- surf_long %>%
   group_by(project, label, indicator) %>%
   summarize(across(value, mean_sd_cv)) %>%
@@ -224,25 +317,14 @@ indicator_summary_wide <- surf_long %>%
   pivot_wider(names_from=indicator, values_from=summary:value_cv) %>%
   arrange(factor(project, levels=project_plotting_order), label) %>%
   relocate(project, label, summary_bulk_density, summary_kssl_wsa, summary_yoder_agg_stab_mwd, summary_soc_pct, summary_ace, summary_pox_c, summary_soil_respiration, summary_bglucosidase, summary_bglucosaminidase, summary_acid_phosphatase, summary_alkaline_phosphatase, summary_arylsulfatase)
-```
-
-    ## `summarise()` has grouped output by 'project', 'label'. You can override using
-    ## the `.groups` argument.
-
-``` r
 flextable(indicator_summary_wide)
+
+# write_csv(indicator_summary_wide, here("figs", "ms_revision_figs", "tablesupp1_indicator_summary.csv"))
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/Table S1 mean indicator values in all systems-1.png" width="8789" />
+Range in mean indicator values across projects (which indicators were the most variable?):
 
-``` r
-# write_csv(indicator_summary_wide, here("figs", "ms_figs_alt", "tablesupp1_indicator_summary.csv"))
-```
-
-Range in mean indicator values across projects (which indicators were
-the most variable?):
-
-``` r
+```{r range in mean indicator values across projects}
 indicator_mean_range <- surf_long %>%
   group_by(project, label, indicator) %>%
   summarize(across(value, mean_sd)) %>%
@@ -251,45 +333,25 @@ indicator_mean_range <- surf_long %>%
   group_by(indicator) %>%
   summarize(across(value_mean, min_max)) %>%
   mutate(fold = value_mean_max/value_mean_min)
-```
-
-    ## `summarise()` has grouped output by 'project', 'label'. You can override using
-    ## the `.groups` argument.
-
-``` r
 flextable(indicator_mean_range)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/range in mean indicator values across projects-1.png" width="1047" />
+Calculate the CV for overall dataset (group only by indicator, not by project or treatment):
 
-Calculate the CV for overall dataset (group only by indicator, not by
-project or treatment):
-
-``` r
+```{r cv for overall dataset grouped by indicator}
 indicator_cv_range <- surf_long %>%
   group_by(indicator, label) %>%
   summarize(across(value, mean_sd_cv)) %>%
   mutate(indicator=factor(indicator, levels=indicator_plotting_order),
          value_cv=round(value_cv, 0)) %>%
   arrange(indicator)
-```
-
-    ## `summarise()` has grouped output by 'indicator'. You can override using the
-    ## `.groups` argument.
-
-``` r
 flextable(indicator_cv_range)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/cv for overall dataset grouped by indicator-1.png" width="972" />
-
-``` r
-# write_csv(indicator_cv_range, here("figs", "ms_figs_alt", "table2_cv_range.csv"))
+# write_csv(indicator_cv_range, here("figs", "ms_revision_figs", "table2_cv_range.csv"))
 ```
 
 ## Use a correlation analysis to look at the structure and covariance of the soil health metrics
 
-``` r
+```{r Figure S1 correlation matrix}
 indicators_only <- surf %>%
   dplyr::select(bulk_density, soc_pct, kssl_wsa:yoder_agg_stab_mwd, soil_respiration:acid_phosphatase, arylsulfatase:ace)
 indicators_normalized <- scale(indicators_only)
@@ -305,51 +367,28 @@ ggcorrplot(corr_matrix, p.mat=corr_pmat, hc.order=TRUE, type="lower",
   theme_katy() +
   theme(axis.text.x = element_text(angle = 45, hjust=1),
         axis.title=element_blank())
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%20S1%20correlation%20matrix-1.png)<!-- -->
-
-``` r
-# ggsave(here("figs", "ms_figs_alt", "figsupp1_surface_indicator_corrplot.png"), width=140, height=100, units="mm", dpi=500)
+# ggsave(here("figs", "ms_revision_figs", "figsupp1_surface_indicator_corrplot.png"), width=140, height=100, units="mm", dpi=500)
 ```
 
 ## Principal Components Analysis of indicator data
 
-There are a lot of missing values in the indicator data because not
-every metric was measured by every cooperator. PCA doesn’t handle
-missing values, so I used the missMDA package to impute missing data.
-The package imputes missing values so that the imputed values have no
-weight on the results (i.e. just allows the analysis to be completed).
+There are a lot of missing values in the indicator data because not every metric was measured by every cooperator. PCA doesn't handle missing values, so I used the missMDA package to impute missing data. The package imputes missing values so that the imputed values have no weight on the results (i.e. just allows the analysis to be completed).
 
 Impute missing data and run PCA of soil health indicators:
 
-``` r
+```{r impute missing data and run pca of soil health indicators}
 nb <- estim_ncpPCA(indicators_only,method.cv = "Kfold", verbose = FALSE) # estimate the number of components from incomplete data
 nb$ncp
-```
-
-    ## [1] 5
-
-``` r
 res.comp <- imputePCA(indicators_only, ncp = nb$ncp)
 imp_ind <- res.comp$completeObs
 imp_pca <- prcomp(imp_ind, scale.=TRUE)
 summary(imp_pca)
 ```
 
-    ## Importance of components:
-    ##                           PC1    PC2    PC3     PC4     PC5     PC6     PC7
-    ## Standard deviation     1.9815 1.5062 1.3019 1.06708 0.95656 0.71308 0.61707
-    ## Proportion of Variance 0.3272 0.1890 0.1412 0.09489 0.07625 0.04237 0.03173
-    ## Cumulative Proportion  0.3272 0.5162 0.6575 0.75236 0.82861 0.87098 0.90271
-    ##                            PC8     PC9    PC10    PC11    PC12
-    ## Standard deviation     0.58952 0.57287 0.50191 0.40313 0.27806
-    ## Proportion of Variance 0.02896 0.02735 0.02099 0.01354 0.00644
-    ## Cumulative Proportion  0.93167 0.95902 0.98001 0.99356 1.00000
-
 Plot PCA results:
 
-``` r
+```{r plot pca results}
 # plot PCA biplot colored by soil series
 pca_soil <- autoplot(imp_pca, data=surf, colour="soil", size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
@@ -361,11 +400,7 @@ pca_soil <- autoplot(imp_pca, data=surf, colour="soil", size=2, alpha=0.7,
   geom_vline(xintercept=0, linetype="dashed") +
   theme_classic()
 pca_soil
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/plot%20pca%20results-1.png)<!-- -->
-
-``` r
 # plot PCA biplot colored by suborder
 pca_suborder <- autoplot(imp_pca, data=surf, colour="suborder", size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
@@ -377,11 +412,7 @@ pca_suborder <- autoplot(imp_pca, data=surf, colour="suborder", size=2, alpha=0.
   geom_vline(xintercept=0, linetype="dashed") +
   theme_classic()
 pca_suborder
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/plot%20pca%20results-2.png)<!-- -->
-
-``` r
 # is suborder the same as project
 pca_project <- autoplot(imp_pca, data=surf, colour="project", size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
@@ -393,11 +424,7 @@ pca_project <- autoplot(imp_pca, data=surf, colour="project", size=2, alpha=0.7,
   geom_vline(xintercept=0, linetype="dashed") +
   theme_classic()
 pca_project
-```
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/plot%20pca%20results-3.png)<!-- -->
-
-``` r
+    
 # plot pca biplot colored by management
 pca_mgmt <- autoplot(imp_pca, data=surf, colour="label", size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
@@ -413,44 +440,19 @@ pca_mgmt <- autoplot(imp_pca, data=surf, colour="label", size=2, alpha=0.7,
 pca_mgmt   
 ```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/plot%20pca%20results-4.png)<!-- -->
-
-``` r
+```{r permanova}
 # Use adonis2() function in vegan package
 permanova_suborder <- adonis2(imp_ind ~ suborder, data=surf, method="eu") %>%
   broom::tidy() %>%
   mutate(model = "soil_suborder")
-```
-
-    ## Warning: The column names SumOfSqs and R2 in ANOVA output were not recognized or
-    ## transformed.
-
-``` r
 permanova_soil <- adonis2(imp_ind ~ soil, data=surf, method="eu") %>%
   broom::tidy()
-```
-
-    ## Warning: The column names SumOfSqs and R2 in ANOVA output were not recognized or
-    ## transformed.
-
-``` r
 permanova_project <- adonis2(imp_ind ~ project, data=surf, method="eu") %>%
   broom::tidy()
-```
-
-    ## Warning: The column names SumOfSqs and R2 in ANOVA output were not recognized or
-    ## transformed.
-
-``` r
 permanova_label <- adonis2(imp_ind ~ label, data=surf, method="eu") %>%
   broom::tidy() %>%
   mutate(model = "treatment")
-```
 
-    ## Warning: The column names SumOfSqs and R2 in ANOVA output were not recognized or
-    ## transformed.
-
-``` r
 permanova_table <- bind_rows(permanova_suborder, permanova_label) %>%
   rename(sum_sq = "SumOfSqs",
          r2 = "R2") %>%
@@ -458,37 +460,26 @@ permanova_table <- bind_rows(permanova_suborder, permanova_label) %>%
   mutate(r2 = round(r2, 2),
          statistic = round(statistic, 1))
 flextable(permanova_table)
+# write_csv(permanova_table, here("figs", "ms_revision_figs", "tablesupp2_permanova_table.csv"))
 ```
+Clustering is significant by soil series, suborder, and management. Soils explain more variability than management.
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/permanova-1.png" width="1141" />
-
-``` r
-# write_csv(permanova_table, here("figs", "ms_figs_alt", "tablesupp2_permanova_table.csv"))
-```
-
-Clustering is significant by soil series, suborder, and management.
-Soils explain more variability than management.
-
-``` r
+```{r Figure 2 PCA}
 # Put soil and management groupings together in a grid
 pca_suborder / pca_mgmt + 
   plot_annotation(tag_levels = 'A')  & 
   theme(plot.tag = element_text(face="bold"))
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%202%20PCA-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt","fig2_indicator_pca_grid.png"), width=6.5, height=10, units="in", dpi=500)
-# ggsave(here::here("figs", "ms_figs_alt","fig2.pdf"), width=6.5, height=10, units="in", dpi=1000)
+# ggsave(here::here("figs", "ms_revision_figs","fig2_indicator_pca_grid.png"), width=6.5, height=10, units="in", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs","fig2.pdf"), width=6.5, height=10, units="in", dpi=1000)
 ```
 
 ## Identify environmental covariates of indicators in reference sites using glmulti and feature importance
 
-Select best model predicting each indicator at reference sites only
-using glmulti.
+Select best model predicting each indicator at reference sites only using glmulti.
 
-``` r
+```{r glmulti to select best model at reference sites}
+
 multi_ref <- surf_long %>%
   filter(label=="Ref") %>%
   group_by(indicator) %>%
@@ -498,58 +489,7 @@ multi_ref <- surf_long %>%
   mutate(weight = purrr::map(multi_obj, ~(weightable(.x) %>% slice_head(n=1)))) %>%
   transmute(indicator, data, weight) %>%
   unnest(cols = c(weight))
-```
 
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-    ## Initialization...
-    ## TASK: Exhaustive screening of candidate set.
-    ## Fitting...
-    ## Completed.
-
-``` r
 # Calculate linear models
 multi_ref_lm <- multi_ref %>%
   mutate(lm_obj = purrr::map(data, ~lm(model, data=.x)),
@@ -570,7 +510,7 @@ multi_ref_featimp <- multi_ref_lm %>%
 
 Make top model for each indicator into a nice table:
 
-``` r
+```{r top models for each indicator - ref sites}
 multi_ref_table <- multi_ref_lm %>%
   ungroup() %>%
   transmute(indicator, model, lm_tidy) %>%
@@ -586,11 +526,8 @@ multi_ref_table <- multi_ref_lm %>%
 flextable(multi_ref_table)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/top models for each indicator - ref sites-1.png" width="1340" />
-
 Pull out coefficients for all models to go in Table S2:
-
-``` r
+```{r table s3 coefficients for all lms}
 multi_ref_coef <- multi_ref_lm %>%
   ungroup() %>%
   select(indicator, model, lm_coefs) %>%
@@ -600,26 +537,18 @@ multi_ref_coef <- multi_ref_lm %>%
   mutate(estimate = round(estimate, 1),
          sign = ifelse(estimate < 0, "negative", "positive"))
 flextable(multi_ref_coef)
-```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/table s3 coefficients for all lms-1.png" width="1091" />
-
-``` r
 multi_ref_summary <- left_join(multi_ref_table, multi_ref_coef, by=c("indicator", "model")) %>%
   relocate(indicator_print, .before=indicator) %>%
   select(-indicator)
 flextable(multi_ref_summary)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/table s3 coefficients for all lms-2.png" width="1639" />
-
-``` r
-# write_csv(multi_ref_summary, here::here("figs", "ms_figs_alt", "tablesupp3_multi_ref_lm_coefs.csv"))
+# write_csv(multi_ref_summary, here::here("figs", "ms_revision_figs", "tablesupp3_multi_ref_lm_coefs.csv"))
 ```
 
 Pull out feature importance and plot:
 
-``` r
+```{r Figure 3 feature importance}
+
 multi_ref_featimp_df <- multi_ref_featimp %>%
   ungroup() %>%
   select(indicator, imp_data) %>%
@@ -644,21 +573,12 @@ ggplot(multi_ref_featimp_df, aes(fill=feature,
                     guide = guide_legend(reverse = TRUE)) +
   theme_katy() +
   coord_flip()
+
+# ggsave(here::here("figs", "ms_revision_figs","fig3_indicator_ref_mse.png"), height=100, width=140, units="mm", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs","fig3.pdf"), height=100, width=140, units="mm", dpi=1000)
 ```
 
-    ## Warning: 6 unknown levels in `f`: alkaline_phosphatase, acid_phosphatase,
-    ## bglucosaminidase, bglucosidase, pox_c, and yoder_agg_stab_mwd
-    ## 6 unknown levels in `f`: alkaline_phosphatase, acid_phosphatase,
-    ## bglucosaminidase, bglucosidase, pox_c, and yoder_agg_stab_mwd
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%203%20feature%20importance-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt","fig3_indicator_ref_mse.png"), height=100, width=140, units="mm", dpi=500)
-# ggsave(here::here("figs", "ms_figs_alt","fig3.pdf"), height=100, width=140, units="mm", dpi=1000)
-```
-
-``` r
+```{r feature importance ranking}
 multi_ref_featimp_df %>%
   group_by(indicator) %>%
   arrange(indicator, desc(importance)) %>%
@@ -666,38 +586,28 @@ multi_ref_featimp_df %>%
   flextable()
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/feature importance ranking-1.png" width="1270" />
 
 # Use meta-analysis methods to determine indicator sensitivity to management across all projects
 
-We’re going to treat the DSP4SH database like a meta-analysis and use
-functions in the metafor() package to calculate the effect size of SHM
-and Ref treatments on soil health indicators. This version of the
-analysis uses data that is slightly altered from what cooperators
-originally provided - the names of some treatments have been changed to
-combine treatments that are reasonably similar for accurate effect size
-calculation.
+Treat the DSP4SH database like a meta-analysis and use functions in the metafor() package to calculate the effect size of SHM and Ref treatments on soil health indicators. This version of the analysis uses data that is slightly altered from what cooperators originally provided - the names of some treatments have been changed to combine treatments that are reasonably similar for accurate effect size calculation.
 
 Changes:
 
-- Kansas State Ref “Native Rangeland” treatments were combined into one
+-   Kansas State Ref "Native Rangeland" treatments were combined into one
 
-- NC State BAU (Wheat 1-3) and SHM (Hay 1-3) were recoded as just
-  “wheat” and “hay” so each replicate wouldn’t be treated as a treatment
+-   NC State BAU (Wheat 1-3) and SHM (Hay 1-3) were recoded as just "wheat" and "hay" so each replicate wouldn't be treated as a treatment
 
-- All Oregon State no-till grass projects were coded to land use =
-  “GRASS” (previously, two were coded as “CROP” and one was coded as
-  “GRASS” leading to separation of these treatments)
+-   All Oregon State no-till grass projects were coded to land use = "GRASS" (previously, two were coded as "CROP" and one was coded as "GRASS" leading to separation of these treatments)
 
-- Texas A&M BAU and SHM treatment labels were condensed
+-   Texas A&M BAU and SHM treatment labels were condensed
 
-- Washington State labels were condensed
+-   Washington State labels were condensed 
 
 ## Calculate effect size for individual treatments and plot indicator effect sizes
 
 Prep data for effect size calculation:
 
-``` r
+```{r prepare data for effect size calculation}
 # Pivot data longer
 meta_long <- surf %>%
   dplyr::select(project, dsp_pedon_id, soil, label, lu, till, trt,  
@@ -742,7 +652,7 @@ es_in_big <- nested2 %>%
 
 Calculate effect sizes:
 
-``` r
+```{r calculate effect sizes}
 es_asp1 <- escalc(n1i = n_asp, n2i = n_bau, m1i = mean_asp, m2i = mean_bau, 
                   sd1i = sd_asp, sd2i = sd_bau, data = es_in_big, measure = "ROM")
 
@@ -757,12 +667,7 @@ site_clim_sum <- project %>%
 site_clay <- surf %>%
   group_by(project, label) %>%
   dplyr::summarize(clay_mean = mean(clay_combined, na.rm=TRUE))
-```
 
-    ## `summarise()` has grouped output by 'project'. You can override using the
-    ## `.groups` argument.
-
-``` r
 # Join climate and clay% data to effect size data - these will be used as moderator variables for meta-regression later on
 es_asp <- es_asp1 %>%
   na.omit() %>% # omit any rows with NA - this should just be places where NaNs were calculated
@@ -774,10 +679,9 @@ es_asp <- es_asp1 %>%
   left_join(site_clay, by=c("project", "label")) # add in clay content
 ```
 
-Once effect sizes are calculated, they can be used to calculate a random
-effects model to determine significance of effect sizes.
+Once effect sizes are calculated, they can be used to calculate a random effects model to determine significance of effect sizes.
 
-``` r
+```{r calculate random effects models for all projects with no moderator variables}
 # nest data by indicators and treatment contrasts, calculate random-effects models, extract data from model
 es_asp_rma_nomod <- es_asp %>%
   group_by(indicator, label) %>%
@@ -798,10 +702,9 @@ es_asp_rma_nomod <- es_asp %>%
   mutate(plot_df = purrr::map2(study_df, summary_df, rbind))
 ```
 
-Generate forest plots for each indicator, and a table of which
-indicators are significantly influenced by treatment:
+Generate forest plots for each indicator, and a table of which indicators are significantly influenced by treatment:
 
-``` r
+```{r forest plots and table of significant indicators}
 # pull out plotting data
 es_asp_rma_plot_df <- es_asp_rma_nomod %>%
   select(indicator, label, plot_df, rma_tidy) %>%
@@ -877,68 +780,7 @@ plot_list3 <- purrr::map(.x = indicators,
                   })
 
 plot_list3
-```
 
-    ## [[1]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-1.png)<!-- -->
-
-    ## 
-    ## [[2]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-2.png)<!-- -->
-
-    ## 
-    ## [[3]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-3.png)<!-- -->
-
-    ## 
-    ## [[4]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-4.png)<!-- -->
-
-    ## 
-    ## [[5]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-5.png)<!-- -->
-
-    ## 
-    ## [[6]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-6.png)<!-- -->
-
-    ## 
-    ## [[7]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-7.png)<!-- -->
-
-    ## 
-    ## [[8]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-8.png)<!-- -->
-
-    ## 
-    ## [[9]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-9.png)<!-- -->
-
-    ## 
-    ## [[10]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-10.png)<!-- -->
-
-    ## 
-    ## [[11]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-11.png)<!-- -->
-
-    ## 
-    ## [[12]]
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/forest%20plots%20and%20table%20of%20significant%20indicators-12.png)<!-- -->
-
-``` r
 # Save plots
 # purrr::map(.x = indicators,
 #                   .f = ~{
@@ -958,7 +800,7 @@ plot_list3
 #                       theme_katy() +
 #                       theme(legend.position="none")
 #                     
-#                     ggsave(here::here("figs","ms_figs_alt",glue::glue("figsupp_es_", .x,".png")), 
+#                     ggsave(here::here("figs","ms_revision_figs",glue::glue("figsupp_es_", .x,".png")), 
 #                            width=120, height=160, units="mm", dpi=500)
 #                     
 #                   })
@@ -966,7 +808,7 @@ plot_list3
 
 Plot the overall effect size for each indicator:
 
-``` r
+```{r Figure 4 effect sizes}
 # make dataframe for plotting
 es_rma_summary <- es_asp_rma_plot_df %>%
   filter(type=="summary") %>%
@@ -988,18 +830,13 @@ ggplot(es_rma_summary, aes(x=fct_relevel(indicator, rev(indicator_plotting_order
                      breaks=c("SHM", "Ref"), 
                     name="Management") +
   theme_katy()
-```
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%204%20effect%20sizes-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "fig4_indicator_effect_sizes.png"), width=140, height=100, units="mm", dpi=500)
-# ggsave(here::here("figs", "ms_figs_alt", "fig4.pdf"), width=140, height=100, units="mm", dpi=1000)
+# ggsave(here::here("figs", "ms_revision_figs", "fig4_indicator_effect_sizes.png"), width=140, height=100, units="mm", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs", "fig4.pdf"), width=140, height=100, units="mm", dpi=1000)
 ```
 
 Make table with n for interpretability:
 
-``` r
+```{r table with observation n for random-effects models}
 es_rma_n_df <- es_asp_rma_nomod %>%
   select(indicator, label, plot_df) %>%
   filter(indicator!="soc_stock_0_30cm") %>%
@@ -1015,9 +852,8 @@ es_rma_n_df <- es_asp_rma_nomod %>%
 flextable(es_rma_n_df)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/table with observation n for random-effects models-1.png" width="628" />
 
-``` r
+```{r table s4 summary of random effects models}
 rma_report_table <- es_asp_rma_nomod %>%
   mutate(report_df = purrr::map(rma_obj, ~data.frame(tau2 = .x$tau2,
                                               i2 = .x$I2,
@@ -1043,29 +879,18 @@ rma_report_table <- es_asp_rma_nomod %>%
   arrange(indicator, label) %>%
   relocate(k, .after=label)
 flextable(rma_report_table)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/Table 2 summary of random effects models-1.png" width="1992" />
-
-``` r
-# write_csv(rma_report_table, here::here("figs", "ms_figs_alt","table3_rma_report_table.csv"))
+# write_csv(rma_report_table, here::here("figs", "ms_revision_figs","tablesupp4_rma_report_table.csv"))
 ```
 
 ## Calculate random-effects models with moderating variables
 
-Our previous random-effects models only determined if indicators were
-significantly influenced by treatment. However, those models didn’t
-include any moderating variables and couldn’t tell us what variables
-influenced the response of indicators to treatment. Some potential
-moderating variables of interest are MAT, MAP, land use, and tillage.
+Our previous random-effects models only determined if indicators were significantly influenced by treatment. However, those models didn't include any moderating variables and couldn't tell us what variables influenced the response of indicators to treatment. Some potential moderating variables of interest are MAT, MAP, and soil clay content.
 
 ### MAT as a moderator variable
 
-Calculate random-effects model with MAT as a moderator variable,
-generate table of results, and generate table of indicators for which
-MAT is a significant moderator variable:
+Calculate random-effects model with MAT as a moderator variable, generate table of results, and generate table of indicators for which MAT is a significant moderator variable:
 
-``` r
+```{r random effects model with mat as a moderator variable}
 # Calculate random-effects model
 es_asp_rma_mat <- es_asp %>%
   group_by(indicator) %>%
@@ -1108,23 +933,16 @@ mat_rma_report_table <- es_asp_rma_mat %>%
          indicator = factor(indicator, levels=indicator_plotting_order)) %>%
   arrange(indicator)
 flextable(mat_rma_report_table)
-```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with mat as a moderator variable-1.png" width="2513" />
-
-``` r
 # Extract significant moderator variables
 mat_rma_report_table_sig <- mat_rma_report_table %>%
   filter(q_mod_sig=="significant") 
 flextable(mat_rma_report_table_sig)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with mat as a moderator variable-2.png" width="2391" />
+Plot relationship between MAT and indicator variables for which it is a significant predictor:
 
-Plot relationship between MAT and indicator variables for which it is a
-significant predictor:
-
-``` r
+```{r Figure S14 mat mod}
 # MAT - Significant for bglucosidase and arysulfatase
 
 # Make vector of indicators 
@@ -1156,21 +974,15 @@ mat_as <- pluck(mat_plots, 2)
 mat_bg + mat_as + plot_layout(guides = 'collect', axes="collect") +
   plot_annotation(tag_levels = 'A')  & 
   theme(plot.tag = element_text(face="bold"))
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%20S14%20mat%20mod-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "figsupp14_mat_mod_reg.png"), width=180, height=100, units="mm", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs", "figsupp14_mat_mod_reg.png"), width=180, height=100, units="mm", dpi=500)
 ```
 
 ### MAP as a moderator variable
 
-Calculate random-effects model with MAP as a moderator variable,
-generate table of results, and generate table of indicators for which
-MAP is a significant moderator variable:
+Calculate random-effects model with MAP as a moderator variable, generate table of results, and generate table of indicators for which MAP is a significant moderator variable:
 
-``` r
+```{r random effects model with map as a moderator variable}
 # Calculate random-effects model
 es_asp_rma_map <- es_asp %>%
   group_by(indicator) %>%
@@ -1213,23 +1025,16 @@ map_rma_report_table <- es_asp_rma_map %>%
          indicator = factor(indicator, levels=indicator_plotting_order)) %>%
   arrange(indicator)
 flextable(map_rma_report_table)
-```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with map as a moderator variable-1.png" width="2513" />
-
-``` r
 # Extract significant moderator variables
 map_rma_report_table_sig <- map_rma_report_table %>%
   filter(q_mod_sig=="significant") 
 flextable(map_rma_report_table_sig)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with map as a moderator variable-2.png" width="2508" />
+Plot relationship between MAP and indicator variables for which it is a significant predictor:
 
-Plot relationship between MAP and indicator variables for which it is a
-significant predictor:
-
-``` r
+```{r Figure S15 map mod}
 # MAP is significant for alkP and arysulfatase
 
 # Make vector of indicators 
@@ -1262,111 +1067,11 @@ map_as <- pluck(map_plots, 3)
 map_bd + map_alkp + map_as + plot_layout(guides = 'collect', axes="collect") +
   plot_annotation(tag_levels = 'A')  & 
   theme(plot.tag = element_text(face="bold"))
+
+# ggsave(here::here("figs", "ms_revision_figs", "figsupp15_map_mod_reg.png"), width=180, height=100, units="mm", dpi=500)
 ```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%20S15%20map%20mod-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "figsupp15_map_mod_reg.png"), width=180, height=100, units="mm", dpi=500)
-```
-
-### Land use as a moderator variable
-
-Calculate random-effects model with land use as a moderator variable,
-generate table of results, and generate table of indicators for which
-land use is a significant moderator variable:
-
-``` r
-# Calculate random-effects model
-es_asp_rma_lu <- es_asp %>%
-  group_by(indicator) %>%
-  nest() %>%
-  mutate(rma_obj = purrr::map(data, ~rma(yi, vi, slab = project, mod = ~ factor(lu), data=.x, method="REML"))) %>%
-  mutate(rma_tidy = purrr::map(rma_obj, broom::tidy))
-
-# Make table for reporting, also include QM test of moderators
-lu_rma_report_table <- es_asp_rma_lu %>%
-  mutate(report_df = purrr::map(rma_obj, ~data.frame(tau2 = .x$tau2,
-                                              i2 = .x$I2,
-                                              h2 = .x$H2,
-                                              r2 = .x$R2,
-                                              q_stat = .x$QE,
-                                              q_pval = .x$QEp,
-                                              q_mod = .x$QM,
-                                              q_mod_pval = .x$QMp))) %>%
-  select(indicator, rma_tidy, report_df) %>%
-  ungroup() %>%
-  transmute(indicator, rma_tidy, report_df) %>%
-  unnest(cols = c(rma_tidy, report_df)) %>%
-  filter(term != "intercept") %>%
-  select(-type) %>%
-  mutate(q_sig = ifelse(q_pval<0.05, "significant", "not significant"),
-         q_mod_sig = ifelse(q_mod_pval<0.05, "significant", "not significant"),
-         estimate = round(estimate, 2),
-         std.error = round(std.error, 2),
-         statistic = round(statistic, 2),
-         p.value = ifelse(round(p.value, 3) ==0, "<0.001", round(p.value, 3)),
-         tau2 = round(tau2, 2),
-         i2 = round(i2, 1),
-         h2 = round(h2, 1),
-         r2 = round(r2, 2),
-         q_stat = round(q_stat, 1),
-         q_pval = ifelse(round(q_pval, 3)==0, "<0.001", round(q_pval, 3)),
-         q_mod = round(q_mod, 1),
-         q_mod_pval = ifelse(round(q_mod_pval, 3)==0, "<0.001", round(q_mod_pval, 3)),
-         indicator = factor(indicator, levels=indicator_plotting_order)) %>%
-  arrange(indicator)
-flextable(lu_rma_report_table)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with land use as a moderator variable-1.png" width="2816" />
-
-``` r
-# Extract significant moderator variables
-lu_rma_report_table_sig <- lu_rma_report_table %>%
-  filter(q_mod_sig=="significant") 
-flextable(lu_rma_report_table_sig)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with land use as a moderator variable-2.png" width="2811" />
-
-Plot relationship between land use and indicator variables for which it
-is a significant predictor:
-
-``` r
-lu_indicators_df <- lu_rma_report_table_sig %>%
-  distinct(indicator)
-lu_indicators <- as.vector(lu_indicators_df$indicator)
-
-lu_plots <- purrr::map(.x = lu_indicators,
-                .f = ~{
-                  es_asp %>% 
-                    filter(indicator == .x) %>%
-                    ggplot(aes(x=lu, y=yi, fill=label)) +
-                    geom_boxplot(fatten=1.5, lwd=0.3, outlier.size=0.8) +
-                    geom_hline(yintercept=0, linetype="dashed") +
-                    labs(x="Land use", y="Log response ratio",
-                         title=glue::glue({filter(indicator_labs_df, indicator==.x)$label})) + 
-                    scale_fill_manual(values=c("#72874EFF","#476F84FF"),
-                                         breaks=c("SHM", "Ref"),
-                                         name="Management") +
-                    theme_katy() +
-                    theme(axis.text.x=element_text(angle=45, hjust=1))
-                })
-
-pluck(lu_plots, 1) + pluck(lu_plots, 2) + pluck(lu_plots, 3) + pluck(lu_plots, 4) + pluck(lu_plots, 5) + 
-  plot_layout(axes="collect", guides = 'collect') +
-  plot_annotation(tag_levels = 'A')  & 
-  theme(plot.tag = element_text(face="bold")) 
-```
-
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%20S16%20lu%20mod-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "figsupp16_lu_mod_box.png"), width=180, height=150, units="mm", dpi=500)
-```
-
-``` r
+```{r random effects model with clay as a moderator variable}
 # Calculate random-effects model
 es_asp_rma_clay <- es_asp %>%
   group_by(indicator) %>%
@@ -1409,22 +1114,15 @@ clay_rma_report_table <- es_asp_rma_clay %>%
          indicator = factor(indicator, levels=indicator_plotting_order)) %>%
   arrange(indicator)
 flextable(clay_rma_report_table)
-```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with clay as a moderator variable-1.png" width="2513" />
-
-``` r
 clay_rma_report_table_sig <- clay_rma_report_table %>%
   filter(q_mod_sig=="significant") 
 flextable(clay_rma_report_table_sig)
 ```
 
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/random effects model with clay as a moderator variable-2.png" width="2513" />
+QM test is significant for multiple sieve aggregate stability and soil respiration.
 
-QM test is significant for multiple sieve aggregate stability and soil
-respiration.
-
-``` r
+```{r Figure S16 clay mod}
 # Clay is significant for yoder mwd and soil respiration
 
 clay_mwd <- ggplot(es_asp %>% filter(indicator=="yoder_agg_stab_mwd"), aes(x=clay_mean, y=yi)) +
@@ -1459,17 +1157,13 @@ clay_mwd + clay_resp +
   plot_layout(axes="collect", guides = 'collect') +
   plot_annotation(tag_levels = 'A')  & 
   theme(plot.tag = element_text(face="bold")) 
-```
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%20S17%20clay%20mod-1.png)<!-- -->
-
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "figsupp17_clay_mod.png"),  width=180, height=100, units="mm", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs", "figsupp16_clay_mod.png"),  width=180, height=100, units="mm", dpi=500)
 ```
 
 ### Compile all significant moderator variables into one table
 
-``` r
+```{r table s5 significant moderator variables}
 # First step is to add an "term" column to MAT and MAP tables so that they will match the LU and TILL tables
 mat2 <- mat_rma_report_table_sig %>%
   mutate(term = "MAT") %>%
@@ -1481,36 +1175,24 @@ map2 <- map_rma_report_table_sig %>%
   relocate(term, .after = indicator) %>%
   mutate(indicator = str_replace_all(indicator, indicator_labs))
 
-lu2 <- lu_rma_report_table_sig %>%
-  mutate(term = str_to_title(term)) %>%
-  mutate(term = str_replace(term, "Factor\\(Lu\\)", "LU - ")) %>%
-  mutate(indicator = str_replace_all(indicator, indicator_labs))
-
 clay2 <- clay_rma_report_table_sig %>%
   mutate(term = "Clay") %>%
   mutate(indicator = str_replace_all(indicator, indicator_labs))
 
 sig_mod_var_report_table <- rbind(mat2,
                                   map2,
-                                  lu2,
                                   clay2
                                   ) %>%
   select(indicator, term, estimate, std.error, p.value, i2, r2, q_stat, q_pval, q_mod, q_mod_pval)
 flextable(sig_mod_var_report_table)
-```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/table s4 significant moderator variables-1.png" width="1714" />
-
-``` r
-# write_csv(sig_mod_var_report_table, here::here("figs", "ms_figs_alt","tablesupp4_sig_mod_var_report_table.csv"))
+# write_csv(sig_mod_var_report_table, here::here("figs", "ms_revision_figs","tablesupp5_sig_mod_var_report_table.csv"))
 ```
 
 # Using SHAPE scores to standardize response to management
 
-Run linear mixed model for significance of management in SHAPE scores
-(accounting for differences between projects) for each indicator:
+Run linear mixed model for significance of management in SHAPE scores (accounting for differences between projects) for each indicator:
 
-``` r
+```{r table s6 SHAPE score summary table}
 # Pull out data
 shape_lmer_df <- shape_spatial_mean_scores %>%
   dplyr::rename(score_mean_poxc = score_mean_ac) %>%
@@ -1520,6 +1202,7 @@ shape_lmer_df <- shape_spatial_mean_scores %>%
                               grepl("_resp", indicator) ~ "resp",
                               grepl("_ace", indicator) ~ "ace",
                               grepl("kssl_was", indicator) ~ "wsa")) %>%
+  filter(indicator!="soc") %>%
   left_join(dplyr::select(project, dsp_pedon_id, project, label, trt), by="dsp_pedon_id")
 
 # Make summary table
@@ -1530,23 +1213,12 @@ shape_summary <- shape_lmer_df %>%
   na.omit() %>%
   unite("summary", shape_score_mean:shape_score_sd) %>%
   pivot_wider(names_from=indicator, values_from=summary) %>%
-  relocate(label, wsa, soc, ace, poxc, resp)
-```
-
-    ## `summarise()` has grouped output by 'indicator'. You can override using the
-    ## `.groups` argument.
-
-``` r
+  relocate(label, wsa, ace, poxc, resp) 
 flextable(shape_summary)
+# write_csv(shape_summary, here::here("figs", "ms_revision_figs", "tablesupp6_shape_summary.csv"))
 ```
-
-<img src="dsp4sh_indicator_analysis_files/figure-gfm/SHAPE score summary table-1.png" width="968" />
-
-``` r
-# write_csv(shape_summary, here::here("figs", "ms_figs_alt", "tablesupp5_shape_summary.csv"))
-```
-
-``` r
+  
+```{r linear mixed models for significance of management in SHAPE scores}
 # Run lmer for all indicators
 shape_lmer <- shape_lmer_df %>%
   mutate(label=factor(label, levels=c("BAU", "SHM", "Ref"))) %>%
@@ -1585,14 +1257,15 @@ shape_letters <- shape_lmer %>%
 
 Plot SHAPE scores for each indicator, grouped by management:
 
-``` r
+```{r Figure 5 SHAPE boxplot}
 # Boxplot of SHAPE scores by management
 ggplot(shape_lmer_df, aes(x=factor(label, levels=c("BAU", "SHM", "Ref")), 
                           y=shape_score, 
                           fill=factor(label, levels=c("BAU", "SHM", "Ref")))) +
-  geom_boxplot(fatten=1.5, lwd=0.3, outlier.size=0.8) +
-  facet_wrap(vars(factor(indicator, levels=c("wsa", "soc", "ace", "poxc", "resp"), 
-                         labels=c("Single sieve aggregate stability", "SOC", "ACE protein", 
+  geom_point(pch=21, position=position_jitterdodge()) +
+  geom_boxplot(fatten=1.5, lwd=0.3, alpha=0.7, outliers=FALSE) +
+  facet_wrap(vars(factor(indicator, levels=c("wsa", "ace", "poxc", "resp"), 
+                         labels=c("Single sieve aggregate stability", "ACE protein", 
                                   "POX-C", "Soil respiration"))),
              scales="free_y") +
   geom_text(data=shape_letters, aes(y=1.1, label=letter), size=8/.pt) +
@@ -1601,14 +1274,15 @@ ggplot(shape_lmer_df, aes(x=factor(label, levels=c("BAU", "SHM", "Ref")),
   scale_fill_manual(values=c("#FED789FF","#72874EFF","#476F84FF")) +
   theme_katy() +
   theme(legend.position="none")
-```
 
-    ## Warning: Removed 193 rows containing non-finite outside the scale range
-    ## (`stat_boxplot()`).
+# ggsave(here::here("figs", "ms_revision_figs", "fig5_shape_scores.png"), height=120, width=140, units="mm", dpi=500)
+# ggsave(here::here("figs", "ms_revision_figs", "fig5.pdf"), height=120, width=140, units="mm", dpi=1000)
 
-![](dsp4sh_indicator_analysis_files/figure-gfm/Figure%205%20SHAPE%20boxplot-1.png)<!-- -->
+ggplot(shape_lmer_df, aes(x=shape_score)) +
+  geom_histogram() +
+  facet_wrap(~indicator)
 
-``` r
-# ggsave(here::here("figs", "ms_figs_alt", "fig5_shape_scores.png"), height=120, width=140, units="mm", dpi=500)
-# ggsave(here::here("figs", "ms_figs_alt", "fig5.pdf"), height=120, width=140, units="mm", dpi=1000)
+# percent of respiration values that are 1 
+
+nrow(shape_lmer_df %>% filter(indicator=="resp", shape_score >= 0.99)) / nrow(shape_lmer_df %>% filter(indicator=="resp"))
 ```
