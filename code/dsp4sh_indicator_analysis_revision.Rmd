@@ -3,8 +3,7 @@ title: "DSP4SH v6 - Indicator Analysis"
 author: "Katy Dynarski"
 date: "2024-4-12"
 output: 
-  html_document: 
-    keep_md: yes
+  github_document
 ---
 
 ```{r setup, include=FALSE}
