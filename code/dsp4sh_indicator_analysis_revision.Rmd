@@ -1202,11 +1202,11 @@ shape_lmer_df <- shape_spatial_mean_scores %>%
                               grepl("_ace", indicator) ~ "ace",
                               grepl("kssl_was", indicator) ~ "wsa")) %>%
   filter(indicator!="soc") %>%
-  left_join(dplyr::select(project, dsp_pedon_id, project, label, trt), by="dsp_pedon_id")
+  left_join(dplyr::select(project, dsp_pedon_id, project, label, trt), by="dsp_pedon_id") %>%
+  mutate(label=factor(label, levels=c("BAU", "SHM", "Ref")))
 
 # Make summary table
 shape_summary <- shape_lmer_df %>%
-  mutate(label=factor(label, levels=c("BAU", "SHM", "Ref"))) %>%
   group_by(indicator, label) %>%
   dplyr::summarize(across(shape_score, mean_sd)) %>%
   na.omit() %>%
@@ -1220,7 +1220,6 @@ flextable(shape_summary)
 ```{r linear mixed models for significance of management in SHAPE scores}
 # Run lmer for all indicators
 shape_lmer <- shape_lmer_df %>%
-  mutate(label=factor(label, levels=c("BAU", "SHM", "Ref"))) %>%
   group_by(indicator) %>%
   nest() %>%
   mutate(lmer = purrr::map(data, ~lmer(shape_score ~ label + (1|project), data = .x)),
@@ -1258,11 +1257,9 @@ Plot SHAPE scores for each indicator, grouped by management:
 
 ```{r Figure 5 SHAPE boxplot}
 # Boxplot of SHAPE scores by management
-ggplot(shape_lmer_df, aes(x=factor(label, levels=c("BAU", "SHM", "Ref")), 
-                          y=shape_score, 
-                          fill=factor(label, levels=c("BAU", "SHM", "Ref")))) +
-  geom_point(pch=21, position=position_jitterdodge()) +
-  geom_boxplot(fatten=1.5, lwd=0.3, alpha=0.7, outliers=FALSE) +
+ggplot(shape_lmer_df, aes(x=label, y=shape_score, fill=label)) +
+  geom_point(aes(color=label), position=position_jitterdodge(), alpha=0.8) +
+  geom_boxplot(fatten=1.5, lwd=0.3, alpha=0, outlier.shape=NA) +
   facet_wrap(vars(factor(indicator, levels=c("wsa", "ace", "poxc", "resp"), 
                          labels=c("Single sieve aggregate stability", "ACE protein", 
                                   "POX-C", "Soil respiration"))),
@@ -1271,15 +1268,12 @@ ggplot(shape_lmer_df, aes(x=factor(label, levels=c("BAU", "SHM", "Ref")),
   labs(y="SHAPEv1.0S Score (Peer Group Percentile)",
        x="Management") +
   scale_fill_manual(values=c("#FED789FF","#72874EFF","#476F84FF")) +
+  scale_color_manual(values=c("#FED789FF","#72874EFF","#476F84FF")) +
   theme_katy() +
   theme(legend.position="none")
 
 # ggsave(here::here("figs", "ms_revision_figs", "fig5_shape_scores.png"), height=120, width=140, units="mm", dpi=500)
 # ggsave(here::here("figs", "ms_revision_figs", "fig5.pdf"), height=120, width=140, units="mm", dpi=1000)
-
-ggplot(shape_lmer_df, aes(x=shape_score)) +
-  geom_histogram() +
-  facet_wrap(~indicator)
 
 # percent of respiration values that are 1 
 
