@@ -388,20 +388,8 @@ summary(imp_pca)
 Plot PCA results:
 
 ```{r plot pca results}
-# plot PCA biplot colored by soil series
-pca_soil <- autoplot(imp_pca, data=surf, colour="soil", size=2, alpha=0.7,
-                     loadings.label = TRUE, loadings.label.size = 3,
-                     loadings.label.colour = 'black', loadings.color="black", 
-                     loadings.label.repel=TRUE) +
-  scale_color_paletteer_d("palettetown::deoxys", name="Soil Series") +
-  stat_ellipse(aes(color=soil))+
-  geom_hline(yintercept=0, linetype="dashed") +
-  geom_vline(xintercept=0, linetype="dashed") +
-  theme_classic()
-pca_soil
-
 # plot PCA biplot colored by suborder
-pca_suborder <- autoplot(imp_pca, data=surf, colour="suborder", size=2, alpha=0.7,
+pca_suborder <- autoplot(imp_pca, data=surf, colour="suborder", pch=21, size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
                      loadings.label.colour = 'black', loadings.color="black", 
                      loadings.label.repel=TRUE) +
@@ -411,21 +399,9 @@ pca_suborder <- autoplot(imp_pca, data=surf, colour="suborder", size=2, alpha=0.
   geom_vline(xintercept=0, linetype="dashed") +
   theme_classic()
 pca_suborder
-
-# is suborder the same as project
-pca_project <- autoplot(imp_pca, data=surf, colour="project", size=2, alpha=0.7,
-                     loadings.label = TRUE, loadings.label.size = 3,
-                     loadings.label.colour = 'black', loadings.color="black", 
-                     loadings.label.repel=TRUE) +
-  scale_color_paletteer_d("palettetown::deoxys", name="Project") +
-    stat_ellipse(aes(color=project))+
-  geom_hline(yintercept=0, linetype="dashed") +
-  geom_vline(xintercept=0, linetype="dashed") +
-  theme_classic()
-pca_project
     
 # plot pca biplot colored by management
-pca_mgmt <- autoplot(imp_pca, data=surf, colour="label", size=2, alpha=0.7,
+pca_mgmt <- autoplot(imp_pca, data=surf, colour="label", pch=21, size=2, alpha=0.7,
                      loadings.label = TRUE, loadings.label.size = 3,
                      loadings.label.colour = 'black', loadings.color="black", 
                      loadings.label.repel=TRUE) +
